@@ -47,32 +47,25 @@ public class MainActivity extends AppCompatActivity implements VideoPlayerCallba
         mStart.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
-                if (mSeekPosition > 0) {
-                    mVideoView.seekTo(mSeekPosition);
-                }
                 mVideoView.start();
                 mMediaController.setTitle("Big Buck Bunny");
             }
         });
-
-        mVideoView.setOnCompletionListener(new MediaPlayer.OnCompletionListener() {
-            @Override
-            public void onCompletion(MediaPlayer mp) {
-                Log.d(TAG, "onCompletion ");
-            }
-        });
-
     }
 
     @Override
     protected void onPause() {
         super.onPause();
-        Log.d(TAG, "onPlayerPause ");
         if (mVideoView != null && mVideoView.isPlaying()) {
-            mSeekPosition = mVideoView.getCurrentPosition();
-            Log.d(TAG, "onPlayerPause mSeekPosition=" + mSeekPosition);
-            mVideoView.pause();
+            mVideoView.pause(false);
         }
+    }
+
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        mVideoView.rePlay();
     }
 
     /**
@@ -115,7 +108,7 @@ public class MainActivity extends AppCompatActivity implements VideoPlayerCallba
     @Override
     public void onConfigurationChanged(Configuration newConfig) {
         super.onConfigurationChanged(newConfig);
-        Log.i(TAG, "-----onConfigurationChanged: "+newConfig.orientation);
+        Log.i(TAG, "-----onConfigurationChanged: " + newConfig.orientation);
     }
 
     @Override
@@ -139,6 +132,16 @@ public class MainActivity extends AppCompatActivity implements VideoPlayerCallba
         switchTitleBar(!isFullscreen);
     }
 
+    @Override
+    public void onPlayerPrepared(MediaPlayer mediaPlayer) {
+
+    }
+
+    @Override
+    public void onPlayerPause(int currentPosition) {
+
+    }
+
     private void switchTitleBar(boolean show) {
         android.support.v7.app.ActionBar supportActionBar = getSupportActionBar();
         if (supportActionBar != null) {
@@ -151,18 +154,33 @@ public class MainActivity extends AppCompatActivity implements VideoPlayerCallba
     }
 
     @Override
-    public void onPlayerPause(MediaPlayer mediaPlayer) {
-        Log.d(TAG, "onPlayerPause UniversalVideoView callback");
-    }
-
-    @Override
     public void onPlayerStart(MediaPlayer mediaPlayer) {
         Log.d(TAG, "onPlayerStart UniversalVideoView callback");
     }
 
     @Override
+    public void onPlayCompleted(MediaPlayer mp) {
+
+    }
+
+    @Override
     public void onBufferingStart(MediaPlayer mediaPlayer) {
         Log.d(TAG, "onBufferingStart UniversalVideoView callback");
+    }
+
+    @Override
+    public void onBuffering(int percent) {
+
+    }
+
+    @Override
+    public void onError(MediaPlayer mp, int what, int extra) {
+
+    }
+
+    @Override
+    public void onInfo(MediaPlayer mp, int what, int extra) {
+
     }
 
     @Override

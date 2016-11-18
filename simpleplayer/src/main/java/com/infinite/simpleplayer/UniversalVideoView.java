@@ -40,7 +40,7 @@ import java.io.IOException;
 
 
 public class UniversalVideoView extends SurfaceView
-        implements MediaPlayerControl, OrientationDetector.OrientationChangeListener {
+        implements MediaPlayerControl, OrientationChangeListener {
     private final String TAG = "UniversalVideoView";
     private Uri mUri;
 
@@ -63,18 +63,14 @@ public class UniversalVideoView extends SurfaceView
     private int mSurfaceWidth;
     private int mSurfaceHeight;
     private SimplePlayerController mMediaController;
-    private MediaPlayer.OnCompletionListener mOnCompletionListener;
-    private MediaPlayer.OnPreparedListener mOnPreparedListener;
     private int mCurrentBufferPercentage;
-    private MediaPlayer.OnErrorListener mOnErrorListener;
-    private MediaPlayer.OnInfoListener mOnInfoListener;
     private int mSeekWhenPrepared;  // recording the seek position while preparing
     private boolean mCanPause;
     private boolean mCanSeekBack;
     private boolean mCanSeekForward;
     private boolean mPreparedBeforeStart;
     private boolean mFitXY = false;
-    private boolean mAutoRotation = false;
+    private boolean mAutoRotation = false;  //自动旋转
     private int mVideoViewLayoutWidth = 0;
     private int mVideoViewLayoutHeight = 0;
     private OrientationDetector mOrientationDetector;
@@ -82,6 +78,8 @@ public class UniversalVideoView extends SurfaceView
 
     private SurfaceHolder mSurfaceHolder = null;
     private MediaPlayer mMediaPlayer = null;
+    private int mVideoDuring;
+    private int mCurrentPosition = 0;  //记录当前的播放位置
 
     public UniversalVideoView(Context context) {
         this(context, null);
@@ -198,25 +196,22 @@ public class UniversalVideoView extends SurfaceView
      */
     private void openVideo() {
         if (mUri == null || mSurfaceHolder == null) {
-            // not ready for playback just yet, will try again later
             return;
         }
         AudioManager am = (AudioManager) mContext.getSystemService(Context.AUDIO_SERVICE);
         am.requestAudioFocus(null, AudioManager.STREAM_MUSIC, AudioManager.AUDIOFOCUS_GAIN);
 
-        // we shouldn't clear the target state, because somebody might have
-        // called start() previously
+        //这里不清除下一个状态，因为可能之前调用了start()方法
         release(false);
         try {
             mMediaPlayer = new MediaPlayer();
-
             if (mAudioSession != 0) {
                 mMediaPlayer.setAudioSessionId(mAudioSession);
             } else {
                 mAudioSession = mMediaPlayer.getAudioSessionId();
             }
             mMediaPlayer.setOnPreparedListener(mPreparedListener);
-            mMediaPlayer.setOnVideoSizeChangedListener(mSizeChangedListener);
+            mMediaPlayer.setOnVideoSizeChangedListener(mVideoSizeChangedListener);
             mMediaPlayer.setOnCompletionListener(mCompletionListener);
             mMediaPlayer.setOnErrorListener(mErrorListener);
             mMediaPlayer.setOnInfoListener(mInfoListener);
@@ -228,19 +223,21 @@ public class UniversalVideoView extends SurfaceView
             mMediaPlayer.setScreenOnWhilePlaying(true);
             mMediaPlayer.prepareAsync();
 
-
-            // we don't set the target state here either, but preserve the
-            // target state that was there before.
+            // 这里不设置目标状态,但保存目标状态
             mCurrentState = STATE_PREPARING;
             attachMediaController();
         } catch (IOException ex) {
-            Log.w(TAG, "Unable to open content: " + mUri, ex);
             mCurrentState = STATE_ERROR;
             mTargetState = STATE_ERROR;
             mErrorListener.onError(mMediaPlayer, MediaPlayer.MEDIA_ERROR_UNKNOWN, 0);
         }
     }
 
+    /**
+     * 设置播放界面控制器
+     *
+     * @param controller
+     */
     public void setMediaController(SimplePlayerController controller) {
         if (mMediaController != null) {
             mMediaController.hide();
@@ -257,32 +254,32 @@ public class UniversalVideoView extends SurfaceView
         }
     }
 
-    MediaPlayer.OnVideoSizeChangedListener mSizeChangedListener =
+    private MediaPlayer.OnVideoSizeChangedListener mVideoSizeChangedListener =
             new MediaPlayer.OnVideoSizeChangedListener() {
                 public void onVideoSizeChanged(MediaPlayer mp, int width, int height) {
                     mVideoWidth = mp.getVideoWidth();
                     mVideoHeight = mp.getVideoHeight();
-                    Log.d(TAG, String.format("onVideoSizeChanged width=%d,height=%d", mVideoWidth, mVideoHeight));
                     if (mVideoWidth != 0 && mVideoHeight != 0) {
                         getHolder().setFixedSize(mVideoWidth, mVideoHeight);
+//                        if (!isInLayout()) {
                         requestLayout();
+//                        }
                     }
                 }
             };
 
-    MediaPlayer.OnPreparedListener mPreparedListener = new MediaPlayer.OnPreparedListener() {
+
+    private MediaPlayer.OnPreparedListener mPreparedListener = new MediaPlayer.OnPreparedListener() {
         public void onPrepared(MediaPlayer mp) {
+
             mCurrentState = STATE_PREPARED;
-
             mCanPause = mCanSeekBack = mCanSeekForward = true;
-
             mPreparedBeforeStart = true;
             if (mMediaController != null) {
                 mMediaController.hideLoading();
             }
-
-            if (mOnPreparedListener != null) {
-                mOnPreparedListener.onPrepared(mMediaPlayer);
+            if (mVideoPlayerCallback != null) {
+                mVideoPlayerCallback.onPlayerPrepared(mMediaPlayer);
             }
             if (mMediaController != null) {
                 mMediaController.setEnabled(true);
@@ -295,28 +292,23 @@ public class UniversalVideoView extends SurfaceView
                 seekTo(seekToPosition);
             }
             if (mVideoWidth != 0 && mVideoHeight != 0) {
-                //Log.i("@@@@", "video size: " + mVideoWidth +"/"+ mVideoHeight);
                 getHolder().setFixedSize(mVideoWidth, mVideoHeight);
-                if (mSurfaceWidth == mVideoWidth && mSurfaceHeight == mVideoHeight) {
-                    // We didn't actually change the size (it was already at the size
-                    // we need), so we won't get a "surface changed" callback, so
-                    // start the video here instead of in the callback.
+                if (mSurfaceWidth == mVideoWidth && mSurfaceHeight == mVideoHeight) { //Surface大小和Video大小一致了，可以开始播放了
                     if (mTargetState == STATE_PLAYING) {
+                        mMediaPlayer.seekTo(mCurrentPosition);
                         start();
                         if (mMediaController != null) {
                             mMediaController.show();
                         }
-                    } else if (!isPlaying() &&
-                            (seekToPosition != 0 || getCurrentPosition() > 0)) {
+                    } else if (!isPlaying() && (seekToPosition != 0 || getCurrentPosition() > 0)) {
                         if (mMediaController != null) {
-                            // Show the media controls when we're paused into a video and make 'em stick.
+                            // 暂停时显示控制面板
                             mMediaController.show(0);
                         }
                     }
                 }
             } else {
-                // We don't know the video size yet, but should start anyway.
-                // The video size might be reported to us later.
+                //这种情况下不知道Video的大小，但是还是要开始播放，可能需要过一段时间才能知道视频的信息
                 if (mTargetState == STATE_PLAYING) {
                     start();
                 }
@@ -337,149 +329,70 @@ public class UniversalVideoView extends SurfaceView
                         // 但start后竟然又回调到这里,导致第一次点击按钮不会播放视频,需要点击第二次.
                         Log.d(TAG, String.format("a=%s,b=%d", a, b));
                     }
-                    if (mOnCompletionListener != null) {
-                        mOnCompletionListener.onCompletion(mMediaPlayer);
+                    if (mVideoPlayerCallback != null) {
+                        mVideoPlayerCallback.onPlayCompleted(mMediaPlayer);
                     }
                 }
             };
 
-    private MediaPlayer.OnInfoListener mInfoListener =
-            new MediaPlayer.OnInfoListener() {
-                public boolean onInfo(MediaPlayer mp, int what, int extra) {
-                    boolean handled = false;
-                    switch (what) {
-                        case MediaPlayer.MEDIA_INFO_BUFFERING_START:
-                            Log.d(TAG, "onInfo MediaPlayer.MEDIA_INFO_BUFFERING_START");
-                            if (mVideoPlayerCallback != null) {
-                                mVideoPlayerCallback.onBufferingStart(mMediaPlayer);
-                            }
-                            if (mMediaController != null) {
-                                mMediaController.showLoading();
-                            }
-                            handled = true;
-                            break;
-                        case MediaPlayer.MEDIA_INFO_BUFFERING_END:
-                            Log.d(TAG, "onInfo MediaPlayer.MEDIA_INFO_BUFFERING_END");
-                            if (mVideoPlayerCallback != null) {
-                                mVideoPlayerCallback.onBufferingEnd(mMediaPlayer);
-                            }
-                            if (mMediaController != null) {
-                                mMediaController.hideLoading();
-                            }
-                            handled = true;
-                            break;
+    private MediaPlayer.OnInfoListener mInfoListener = new MediaPlayer.OnInfoListener() {
+        public boolean onInfo(MediaPlayer mp, int what, int extra) {
+            switch (what) {
+                case MediaPlayer.MEDIA_INFO_BUFFERING_START:
+                    Log.i(TAG, "------onInfo:BUFFERING_START ");
+                    if (mVideoPlayerCallback != null) {
+                        mVideoPlayerCallback.onBufferingStart(mMediaPlayer);
                     }
-                    if (mOnInfoListener != null) {
-                        return mOnInfoListener.onInfo(mp, what, extra) || handled;
-                    }
-                    return handled;
-                }
-            };
-
-    private MediaPlayer.OnErrorListener mErrorListener =
-            new MediaPlayer.OnErrorListener() {
-                public boolean onError(MediaPlayer mp, int framework_err, int impl_err) {
-                    Log.d(TAG, "Error: " + framework_err + "," + impl_err);
-                    mCurrentState = STATE_ERROR;
-                    mTargetState = STATE_ERROR;
                     if (mMediaController != null) {
-                        mMediaController.showError();
+                        Log.i(TAG, "------onInfo:showLoading ");
+                        mMediaController.showLoading();
                     }
-
-            /* If an error handler has been supplied, use it and finish. */
-                    if (mOnErrorListener != null) {
-                        if (mOnErrorListener.onError(mMediaPlayer, framework_err, impl_err)) {
-                            return true;
-                        }
+                    break;
+                case MediaPlayer.MEDIA_INFO_BUFFERING_END:
+                    if (mVideoPlayerCallback != null) {
+                        mVideoPlayerCallback.onBufferingEnd(mMediaPlayer);
                     }
+                    if (mMediaController != null) {
+                        mMediaController.hideLoading();
+                    }
+                    break;
+                default:
+                    if (mVideoPlayerCallback != null) {
+                        mVideoPlayerCallback.onInfo(mp, what, extra);
+                    }
+                    break;
+            }
+            return true;
+        }
+    };
 
-            /* Otherwise, pop up an error dialog so the user knows that
-             * something bad has happened. Only try and pop up the dialog
-             * if we're attached to a window. When we're going away and no
-             * longer have a window, don't bother showing the user an error.
-             */
-//                    if (getWindowToken() != null) {
-//                        Resources r = mContext.getResources();
-//                        int messageId;
-//
-//                        if (framework_err == MediaPlayer.MEDIA_ERROR_NOT_VALID_FOR_PROGRESSIVE_PLAYBACK) {
-//                            messageId = com.android.internal.R.string.VideoView_error_text_invalid_progressive_playback;
-//                        } else {
-//                            messageId = com.android.internal.R.string.VideoView_error_text_unknown;
-//                        }
-//
-//                        new AlertDialog.Builder(mContext)
-//                                .setMessage(messageId)
-//                                .setPositiveButton(com.android.internal.R.string.VideoView_error_button,
-//                                        new DialogInterface.OnClickListener() {
-//                                            public void onClick(DialogInterface dialog, int whichButton) {
-//                                        /* If we get here, there is no onError listener, so
-//                                         * at least inform them that the video is over.
-//                                         */
-//                                                if (mOnCompletionListener != null) {
-//                                                    mOnCompletionListener.onCompletion(mMediaPlayer);
-//                                                }
-//                                            }
-//                                        })
-//                                .setCancelable(false)
-//                                .show();
-//                    }
-                    return true;
-                }
-            };
+    private MediaPlayer.OnErrorListener mErrorListener = new MediaPlayer.OnErrorListener() {
+        public boolean onError(MediaPlayer mp, int what, int extra) {
+            mCurrentState = STATE_ERROR;
+            mTargetState = STATE_ERROR;
+            if (mMediaController != null) {
+                mMediaController.showError();
+            }
+            //让用户自己处理
+            if (mVideoPlayerCallback != null) {
+                mVideoPlayerCallback.onError(mp, what, extra);
+            }
+            return true;
+        }
+    };
 
-    private MediaPlayer.OnBufferingUpdateListener mBufferingUpdateListener =
-            new MediaPlayer.OnBufferingUpdateListener() {
-                public void onBufferingUpdate(MediaPlayer mp, int percent) {
-                    mCurrentBufferPercentage = percent;
-                }
-            };
+    private MediaPlayer.OnBufferingUpdateListener mBufferingUpdateListener = new MediaPlayer.OnBufferingUpdateListener() {
+        public void onBufferingUpdate(MediaPlayer mp, int percent) {
+            mCurrentBufferPercentage = percent;
+            if (mVideoPlayerCallback != null) {
+                mVideoPlayerCallback.onBuffering(percent);
+            }
+        }
+    };
 
-    /**
-     * Register a callback to be invoked when the media file
-     * is loaded and ready to go.
-     *
-     * @param l The callback that will be run
-     */
-    public void setOnPreparedListener(MediaPlayer.OnPreparedListener l) {
-        mOnPreparedListener = l;
-    }
-
-    /**
-     * Register a callback to be invoked when the end of a media file
-     * has been reached during playback.
-     *
-     * @param l The callback that will be run
-     */
-    public void setOnCompletionListener(MediaPlayer.OnCompletionListener l) {
-        mOnCompletionListener = l;
-    }
-
-    /**
-     * Register a callback to be invoked when an error occurs
-     * during playback or setup.  If no listener is specified,
-     * or if the listener returned false, VideoView will inform
-     * the user of any errors.
-     *
-     * @param l The callback that will be run
-     */
-    public void setOnErrorListener(MediaPlayer.OnErrorListener l) {
-        mOnErrorListener = l;
-    }
-
-    /**
-     * Register a callback to be invoked when an informational event
-     * occurs during playback or setup.
-     *
-     * @param l The callback that will be run
-     */
-    public void setOnInfoListener(MediaPlayer.OnInfoListener l) {
-        mOnInfoListener = l;
-    }
 
     private SurfaceHolder.Callback mSHCallback = new SurfaceHolder.Callback() {
-        public void surfaceChanged(SurfaceHolder holder, int format,
-                                   int w, int h) {
+        public void surfaceChanged(SurfaceHolder holder, int format, int w, int h) {
             mSurfaceWidth = w;
             mSurfaceHeight = h;
             boolean isValidState = (mTargetState == STATE_PLAYING);
@@ -499,9 +412,10 @@ public class UniversalVideoView extends SurfaceView
         }
 
         public void surfaceDestroyed(SurfaceHolder holder) {
-            // after we return from this we can't use the surface any more
             mSurfaceHolder = null;
-            if (mMediaController != null) mMediaController.hide();
+            if (mMediaController != null) {
+                mMediaController.hide();
+            }
             release(true);
             disableOrientationDetect();
         }
@@ -521,16 +435,18 @@ public class UniversalVideoView extends SurfaceView
         }
     }
 
-    /*
-     * release the media player in any state
+    /**
+     * 释放播放器
+     *
+     * @param clearTargetState 是否清除目标状态
      */
-    private void release(boolean cleartargetstate) {
+    private void release(boolean clearTargetState) {
         if (mMediaPlayer != null) {
             mMediaPlayer.reset();
             mMediaPlayer.release();
             mMediaPlayer = null;
             mCurrentState = STATE_IDLE;
-            if (cleartargetstate) {
+            if (clearTargetState) {
                 mTargetState = STATE_IDLE;
             }
         }
@@ -601,14 +517,25 @@ public class UniversalVideoView extends SurfaceView
         }
     }
 
+    /**
+     * 恢复播放
+     */
+    public void rePlay() {
+        if ((mCurrentState == STATE_PAUSED) && (mCurrentPosition > 0 && mCurrentPosition < mVideoDuring)) {
+            start();
+        }
+    }
 
     @Override
     public void start() {
         if (!mPreparedBeforeStart && mMediaController != null) {
+            Log.i(TAG, "------start:showLoading ");
             mMediaController.showLoading();
         }
-
+        mVideoDuring = getDuration();
+        Log.i(TAG, "-----onPrepared_mVideoDuring" + mVideoDuring);
         if (isInPlaybackState()) {
+            Log.i(TAG, "-----isInPlaybackState" + isInPlaybackState());
             mMediaPlayer.start();
             mCurrentState = STATE_PLAYING;
             if (this.mVideoPlayerCallback != null) {
@@ -620,24 +547,33 @@ public class UniversalVideoView extends SurfaceView
 
     @Override
     public void pause() {
+        pause(true);
+    }
+
+    /**
+     * @param normalPause 如果是响应屏幕关闭用false,正常点击按钮暂停时true
+     */
+    public void pause(boolean normalPause) {
         if (isInPlaybackState()) {
             if (mMediaPlayer.isPlaying()) {
-                mMediaPlayer.pause();
+                mCurrentPosition = getCurrentPosition();
+                if (normalPause) {
+                    mMediaPlayer.pause();
+                } else {
+                    release(false);
+                }
                 mCurrentState = STATE_PAUSED;
                 if (this.mVideoPlayerCallback != null) {
-                    this.mVideoPlayerCallback.onPlayerPause(mMediaPlayer);
+                    this.mVideoPlayerCallback.onPlayerPause(mCurrentPosition);
                 }
             }
         }
-        mTargetState = STATE_PAUSED;
-    }
-
-    public void suspend() {
-        release(false);
-    }
-
-    public void resume() {
-        openVideo();
+        if (normalPause) {
+            mTargetState = STATE_PAUSED;
+        } else {
+            mPreparedBeforeStart = false;
+            mTargetState = STATE_PLAYING;
+        }
     }
 
     @Override
@@ -645,7 +581,6 @@ public class UniversalVideoView extends SurfaceView
         if (isInPlaybackState()) {
             return mMediaPlayer.getDuration();
         }
-
         return -1;
     }
 
@@ -680,6 +615,11 @@ public class UniversalVideoView extends SurfaceView
         return 0;
     }
 
+    /**
+     * 是否是播放状态
+     *
+     * @return
+     */
     private boolean isInPlaybackState() {
         return (mMediaPlayer != null &&
                 mCurrentState != STATE_ERROR &&
