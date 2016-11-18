@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+
+    <declare-styleable name="SimplePlayerController">
+        <attr name="scalable" format="boolean" />
+    </declare-styleable>
+
+
+    <declare-styleable name="UniversalVideoView">
+        <attr name="isFitXY" format="boolean" />
+        <attr name="isAutoRotation" format="boolean" />
+    </declare-styleable>
+
+</resources>
